@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  // Cloudflare Pages serves from the build output directory.
+  // Cloudflare Workers serves the build output via the static-assets binding.
   build: {
     target: "es2022",
     outDir: "dist",

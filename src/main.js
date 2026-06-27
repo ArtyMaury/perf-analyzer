@@ -523,7 +523,7 @@ async function showCommunityPanel(measurement) {
   const data = await fetchBaseline(measurement.cpuName);
 
   if (!data) {
-    // API unavailable (e.g. local `vite dev` without Functions).
+    // API unavailable (e.g. local `vite dev` without the Worker).
     panel.innerHTML = `
       <div class="community__row">
         <span class="community__label">Baseline communautaire</span>

@@ -1,5 +1,5 @@
 /**
- * POST /api/runs  — opt-in contribution of a "clean" benchmark run.
+ * POST /api/runs — opt-in contribution of a "clean" CPU benchmark run.
  *
  * Body (JSON):
  *   {
@@ -13,22 +13,17 @@
  *     clientId?: string     // random per-browser id
  *   }
  *
- * Validation + light rate-limit (per clientId and per IP) protect data quality.
+ * Validation + light rate-limit (per IP) protect data quality.
  * Returns: { ok, inserted, count } where count = total runs for that CPU.
  */
 
-import { json, handleOptions, originOf, num, str } from "./_shared.js";
+import { json, originOf, num, str } from "./_shared.js";
 
 const MAX_BODY = 4 * 1024; // 4 KB is plenty
 const RATE_WINDOW_MS = 60_000; // 1 minute
-const RATE_MAX_PER_WINDOW = 5; // max submissions per client/min
+const RATE_MAX_PER_WINDOW = 5; // max submissions per IP/min
 
-export async function onRequestOptions({ request }) {
-  return handleOptions(request);
-}
-
-export async function onRequestPost(context) {
-  const { request, env } = context;
+export async function postRun(request, env) {
   const origin = originOf(request);
 
   if (!env.DB) {

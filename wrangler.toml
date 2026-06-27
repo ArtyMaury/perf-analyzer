@@ -1,6 +1,26 @@
-# Cloudflare Pages — Git-connected deployment.
+# Cloudflare Workers — Git-connected deployment (Workers + static assets).
+#
+# Replaces the former Cloudflare Pages setup. The Vite-built SPA in ./dist is
+# served via the static-assets binding; the same-origin JSON API under /api/*
+# is handled by the Worker (src/worker/index.js), backed by D1.
 
 name = "perf-analyzer"
-pages_build_output_dir = "dist"
+main = "src/worker/index.js"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+# Unmatched routes return index.html so the SPA renders (client-side routing).
+not_found_handling = "single-page-application"
+# Run the Worker first only for the API; everything else is served as a static
+# asset directly (faster, no Worker invocation).
+run_worker_first = ["/api/*"]
+
+# D1 database for opt-in community baseline contributions.
+# The binding name "DB" matches what the Worker code expects (env.DB).
+[[d1_databases]]
+binding = "DB"
+database_name = "perf-analyzer-db"
+database_id = "07586730-41ae-4cff-a10b-a46e72f4276d"

@@ -1,5 +1,9 @@
 /**
- * Shared helpers for Pages Functions (CORS, JSON responses, validation).
+ * Shared helpers for the Worker API (CORS, JSON responses, validation).
+ *
+ * Ported from the former Pages Functions `functions/api/_shared.js`. The logic
+ * is unchanged; only the surrounding runtime (Worker `fetch` handler instead of
+ * Pages `onRequest*`) differs.
  */
 
 // Origins allowed to call the API from a browser. Same-origin (the app itself)
@@ -8,6 +12,8 @@
 const ALLOWED_ORIGINS = new Set([
   "https://perf.maury.app",
   "https://perf-analyzer.pages.dev",
+  // Workers.dev preview/production subdomain for this Worker.
+  "https://perf-analyzer.workers.dev",
 ]);
 
 /** Build CORS headers for a given request Origin (echo only if allowlisted). */
@@ -58,4 +64,38 @@ export function str(v, max = 200) {
   if (typeof v !== "string") return null;
   const s = v.trim();
   return s ? s.slice(0, max) : null;
+}
+
+// --- stats helpers (shared by the baseline endpoints) ----------------------
+
+export function mean(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+export function median(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+export function mode(arr) {
+  const counts = new Map();
+  let best = null;
+  let bestN = 0;
+  for (const v of arr) {
+    const n = (counts.get(v) || 0) + 1;
+    counts.set(v, n);
+    if (n > bestN) {
+      bestN = n;
+      best = v;
+    }
+  }
+  return best;
+}
+
+export function round(n, dp) {
+  const f = 10 ** dp;
+  return Math.round(n * f) / f;
 }

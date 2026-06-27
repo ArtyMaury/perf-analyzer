@@ -23,19 +23,14 @@
  * Returns: { ok, inserted, count } where count = runs for that metric+group.
  */
 
-import { json, handleOptions, originOf, num, str } from "./_shared.js";
+import { json, originOf, num, str } from "./_shared.js";
 
 const MAX_BODY = 4 * 1024; // 4 KB is plenty
 const RATE_WINDOW_MS = 60_000; // 1 minute
-const RATE_MAX_PER_WINDOW = 8; // max submissions per client/min (disk+ram)
+const RATE_MAX_PER_WINDOW = 8; // max submissions per IP/min (disk+ram)
 const ALLOWED_METRICS = new Set(["disk", "ram"]);
 
-export async function onRequestOptions({ request }) {
-  return handleOptions(request);
-}
-
-export async function onRequestPost(context) {
-  const { request, env } = context;
+export async function postMetricRun(request, env) {
   const origin = originOf(request);
 
   if (!env.DB) {

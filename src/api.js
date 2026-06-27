@@ -1,9 +1,9 @@
 /**
- * Client for the shared-baseline API (Cloudflare Pages Functions + D1).
+ * Client for the shared-baseline API (Cloudflare Worker + D1).
  *
- * Endpoints are same-origin (/api/*) in production. During `vite dev` they are
- * NOT available (no Functions runtime) unless you run `npm run dev:full` via
- * `wrangler pages dev`. Calls fail gracefully when the API is absent.
+ * Endpoints are same-origin (/api/*) in production. During plain `vite dev` they
+ * are NOT available (no Worker runtime) unless you run `npm run dev:full` via
+ * `wrangler dev`. Calls fail gracefully when the API is absent.
  */
 
 // Same-origin: works in production on *.pages.dev and the custom domain.

@@ -38,15 +38,17 @@ qu'attendu, quelque chose le bride.
 2. Lancer un test. L'app affiche l'**indice de santé** (mesuré / potentiel).
 3. Comparer avec/sans EDR-VPN, ou se comparer à la **baseline communautaire**.
 
-## API de partage (Cloudflare Pages Functions + D1)
+## API de partage (Cloudflare Worker + D1)
 
-Les runs « sains » partagés (opt-in) alimentent une base **D1 (SQLite)** via deux
-endpoints same-origin :
+Les runs « sains » partagés (opt-in) alimentent une base **D1 (SQLite)** via des
+endpoints same-origin `/api/*`, servis par le Worker (`src/worker/`) :
 
 | Endpoint | Méthode | Rôle |
 |---|---|---|
-| `/api/runs` | `POST` | Contribue un run (validation + rate-limit basique) |
-| `/api/baseline?cpu=<nom>` | `GET` | Renvoie la baseline communautaire pour ce CPU |
+| `/api/runs` | `POST` | Contribue un run CPU (validation + rate-limit basique) |
+| `/api/baseline?cpu=<nom>` | `GET` | Baseline communautaire pour ce CPU |
+| `/api/metric-runs` | `POST` | Contribue un run disque/RAM |
+| `/api/metric-baseline?metric=<disk\|ram>&group=<clé>` | `GET` | Baseline disque/RAM |
 
 La baseline est une **moyenne tronquée** : les runs anormalement bas (< 70 % de la
 médiane, probablement bridés) sont écartés pour ne pas polluer la référence.
@@ -58,10 +60,10 @@ npm run db:migrate          # applique schema.sql à la prod (D1 --remote)
 npm run db:migrate:local    # idem sur la base locale (pour dev:full)
 ```
 
-Développement avec les Functions actives (sinon `/api/*` est indisponible) :
+Développement avec l'API active (sinon `/api/*` est indisponible) :
 
 ```bash
-npm run dev:full            # wrangler pages dev (Functions + D1 local)
+npm run dev:full            # vite build + wrangler dev (Worker + assets + D1 local)
 ```
 
 ## Mode d'emploi pour comparer EDR / VPN
@@ -94,7 +96,7 @@ centralisé pour pouvoir changer l'URL facilement.
 - **Vanilla JS + Vite** (zéro framework), build statique.
 - Benchmark CPU dans un **Web Worker** (`src/workers/cpu.worker.js`) pour ne pas
   freezer l'UI.
-- Déploiement **Cloudflare Pages** (upload direct via Wrangler).
+- Déploiement **Cloudflare Workers** (static assets + API `/api/*`, D1).
 
 ## Développement
 
@@ -105,28 +107,32 @@ npm run build        # build de production -> dist/
 npm run preview      # prévisualise le build
 ```
 
-## Déploiement (Cloudflare Pages)
+## Déploiement (Cloudflare Workers)
+
+L'app est un **Worker avec static assets** : le SPA buildé (`./dist`) est servi
+en statique, et l'API `/api/*` est gérée par `src/worker/index.js` (D1). Config
+dans `wrangler.toml`.
 
 ### Mode recommandé : intégration Git (déploiement automatique)
 
-Le projet Pages est connecté au repo GitHub. Cloudflare clone, build et déploie
-**automatiquement** à chaque push sur `main`. Réglages à mettre dans le dashboard
-(**Workers & Pages → perf-analyzer → Settings → Builds**) :
+Le Worker est connecté au repo GitHub (**Workers Builds**). Cloudflare clone,
+build et déploie **automatiquement** à chaque push sur `main`. Réglages dans le
+dashboard (**Workers & Pages → perf-analyzer → Settings → Build**) :
 
-| Réglage                  | Valeur          |
-| ------------------------ | --------------- |
-| Build command            | `npm run build` |
-| Build output directory   | `dist`          |
-| Deploy command           | **(vide)**      |
+| Réglage          | Valeur            |
+| ---------------- | ----------------- |
+| Build command    | `npm run build`   |
+| Deploy command   | `npx wrangler deploy` |
 
-> ⚠️ **Ne PAS renseigner de "Deploy command"** (ex. `npx wrangler pages deploy`).
-> Avec l'intégration Git, Cloudflare gère le déploiement lui-même. Une deploy
-> command custom relance Wrangler avec un token API et échoue en
-> `Authentication error [code: 10000]` si le token n'a pas les permissions
-> `Cloudflare Pages: Edit` + `Account: Read`.
+> Le pipeline Workers Builds **exige une Deploy command** (contrairement à Pages).
+> `npx wrangler deploy` utilise le token API auto-généré par Workers Builds, qui a
+> les bonnes permissions — pas besoin de token custom. (L'ancienne erreur
+> `Authentication error [code: 10000]` venait de `wrangler pages deploy`, qui
+> tapait l'API Pages avec un token insuffisant.)
 
-Le binding D1 (`DB` → `perf-analyzer-db`) se configure côté dashboard
-(**Settings → Functions → D1 database bindings**), pas dans `wrangler.toml`.
+Le binding D1 (`DB` → `perf-analyzer-db`) est déclaré dans `wrangler.toml`
+(`[[d1_databases]]`) et déployé avec le Worker — rien à configurer côté dashboard.
+Les en-têtes HTTP statiques sont dans `public/_headers` (copié dans `dist/`).
 
 ### Mode alternatif : déploiement manuel depuis ton poste
 
@@ -139,11 +145,8 @@ npm run cf:login
 Build + déploiement :
 
 ```bash
-npm run deploy:manual    # = vite build + wrangler pages deploy dist
+npm run deploy:manual    # = vite build + wrangler deploy
 ```
-
-Le projet Pages s'appelle `perf-analyzer`. La config est dans `wrangler.toml`,
-les en-têtes HTTP dans `public/_headers`.
 
 ## Structure
 
@@ -160,14 +163,17 @@ src/
   data/cpu-passmark.json   # base PassMark embarquée (~4000 CPU, généré)
   workers/cpu.worker.js    # boucle CPU intensive (hors thread principal)
   style.css
-functions/api/
-  runs.js                  # POST /api/runs   (contribution opt-in)
-  baseline.js              # GET  /api/baseline (moyenne robuste)
-  _shared.js               # helpers CORS/JSON/validation
+  worker/                  # Worker Cloudflare (API /api/* + static assets)
+    index.js               # point d'entrée : routeur /api/* + fallback ASSETS
+    runs.js                # POST /api/runs            (contribution CPU opt-in)
+    baseline.js            # GET  /api/baseline        (moyenne robuste)
+    metric-runs.js         # POST /api/metric-runs     (contribution disque/RAM)
+    metric-baseline.js     # GET  /api/metric-baseline (moyenne robuste)
+    _shared.js             # helpers CORS/JSON/validation/stats
 scripts/parse-passmark.js  # génère data/cpu-passmark.json depuis le HTML PassMark
-schema.sql                 # schéma D1 (table runs)
-public/_headers            # en-têtes de sécurité + cache
-wrangler.toml              # config Cloudflare Pages + binding D1
+schema.sql                 # schéma D1 (tables runs + metric_runs)
+public/_headers            # en-têtes de sécurité + cache (servis avec les assets)
+wrangler.toml              # config Cloudflare Worker (assets + binding D1)
 ```
 
 ## Régénérer la base CPU PassMark

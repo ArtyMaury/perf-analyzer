@@ -7,14 +7,14 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy:manual": "vite build && wrangler pages deploy dist --project-name perf-analyzer",
+    "deploy:manual": "vite build && wrangler deploy",
     "cf:login": "wrangler login",
     "db:migrate": "wrangler d1 execute perf-analyzer-db --remote --file=./schema.sql",
     "db:migrate:local": "wrangler d1 execute perf-analyzer-db --local --file=./schema.sql",
-    "dev:full": "wrangler pages dev --d1 DB=perf-analyzer-db -- npm run dev"
+    "dev:full": "vite build && wrangler dev"
   },
   "devDependencies": {
     "vite": "^5.4.10",
-    "wrangler": "^3.90.0"
+    "wrangler": "^4.105.0"
   }
 }

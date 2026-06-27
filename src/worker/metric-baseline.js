@@ -20,18 +20,13 @@
  * If no data: { ok: true, count: 0, baselineScore: null }
  */
 
-import { json, handleOptions, originOf, str } from "./_shared.js";
+import { json, originOf, str, mean, median, mode, round } from "./_shared.js";
 
 const SAMPLE_LIMIT = 500;
 const LOW_OUTLIER_FRACTION = 0.7;
 const ALLOWED_METRICS = new Set(["disk", "ram"]);
 
-export async function onRequestOptions({ request }) {
-  return handleOptions(request);
-}
-
-export async function onRequestGet(context) {
-  const { request, env } = context;
+export async function getMetricBaseline(request, env) {
   const origin = originOf(request);
 
   if (!env.DB) {
@@ -97,38 +92,4 @@ export async function onRequestGet(context) {
     keptSamples: kept.length,
     unit,
   }, 200, origin);
-}
-
-// --- stats helpers ---------------------------------------------------------
-
-function mean(arr) {
-  if (!arr.length) return 0;
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
-}
-
-function median(arr) {
-  if (!arr.length) return 0;
-  const s = [...arr].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
-function mode(arr) {
-  const counts = new Map();
-  let best = null;
-  let bestN = 0;
-  for (const v of arr) {
-    const n = (counts.get(v) || 0) + 1;
-    counts.set(v, n);
-    if (n > bestN) {
-      bestN = n;
-      best = v;
-    }
-  }
-  return best;
-}
-
-function round(n, dp) {
-  const f = 10 ** dp;
-  return Math.round(n * f) / f;
 }
