@@ -1,21 +1,4 @@
 # Cloudflare Pages — Git-connected deployment.
-#
-# Cloudflare builds and deploys automatically on every push to `main`.
-#
-# The app is static (HTML/CSS/JS) PLUS Pages Functions under /functions
-# that expose /api/* endpoints backed by a D1 (SQLite) database for sharing
-# clean benchmark baselines between users.
-#
-# IMPORTANT (per Cloudflare docs): once `pages_build_output_dir` is present,
-# this file becomes the "source of truth" for Pages configuration. A Pages
-# `[[d1_databases]]` entry then REQUIRES a concrete `database_id`, and the
-# deploy fails without it. To keep the database id out of source control, the
-# D1 binding (`DB`) is configured in the Pages dashboard (Settings -> Bindings)
-# instead of here. Do not add a `[[d1_databases]]` block to this file.
-#
-# Local dev note: `wrangler pages dev` won't have the `DB` binding from this
-# file. Pass it on the CLI when needed, e.g.
-#   wrangler pages dev dist --d1 DB=perf-analyzer-db
 
 name = "perf-analyzer"
 pages_build_output_dir = "dist"
