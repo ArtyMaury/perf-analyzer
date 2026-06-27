@@ -1,0 +1,13 @@
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+
+# Long-cache the fingerprinted assets emitted by Vite.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# NOTE: We intentionally do NOT set Cross-Origin-Embedder-Policy /
+# Cross-Origin-Opener-Policy. Enabling cross-origin isolation would block
+# the network benchmark's requests to httpbin.org (a third-party origin).

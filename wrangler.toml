@@ -1,0 +1,17 @@
+# Cloudflare Pages — direct upload deployment.
+# Deploy with:  npm run deploy   (runs vite build then wrangler pages deploy dist)
+#
+# The app is static (HTML/CSS/JS) PLUS Pages Functions under /functions
+# that expose /api/* endpoints backed by a D1 (SQLite) database for sharing
+# clean benchmark baselines between users.
+
+name = "perf-analyzer"
+pages_build_output_dir = "dist"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 database binding (available as `env.DB` inside functions).
+[[d1_databases]]
+binding = "DB"
+database_name = "perf-analyzer-db"
+database_id = "07586730-41ae-4cff-a10b-a46e72f4276d"

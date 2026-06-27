@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Perf Analyzer — EDR / VPN impact</title>
+    <meta
+      name="description"
+      content="Benchmark CPU, disque, RAM et réseau depuis le navigateur pour mettre en évidence l'impact d'un EDR ou d'un VPN."
+    />
+  </head>
+  <body>
+    <div id="app">
+      <!-- ===================== SIDEBAR ===================== -->
+      <aside class="sidebar">
+        <header class="sidebar__header">
+          <h1 class="sidebar__title">Perf Analyzer</h1>
+          <p class="sidebar__subtitle">CPU · Disque · RAM · Réseau</p>
+        </header>
+
+        <section class="specs" aria-label="Spécifications détectées">
+          <h2 class="specs__heading">Spécifications</h2>
+          <dl id="specs-list" class="specs__list">
+            <!-- Filled by JS -->
+          </dl>
+          <p class="specs__note">
+            ⚠️ Un navigateur ne peut pas lire les vraies specs matérielles
+            (modèle CPU, RAM exacte, swap). Les valeurs ci-dessus sont
+            approximatives et plafonnées par le navigateur pour des raisons de
+            confidentialité.
+          </p>
+        </section>
+
+        <section class="cpuref" aria-label="CPU de référence">
+          <h2 class="specs__heading">CPU de référence</h2>
+          <div class="cpuref__search">
+            <input
+              id="cpu-search"
+              class="cpuref__input"
+              type="text"
+              autocomplete="off"
+              placeholder="Ex. Core i7-12700H, Ryzen 7 5800X…"
+              aria-label="Rechercher votre modèle de CPU"
+            />
+            <ul id="cpu-suggestions" class="cpuref__suggestions" hidden></ul>
+          </div>
+          <div id="cpu-selected" class="cpuref__selected" hidden></div>
+          <details class="cpuref__help">
+            <summary>Comment trouver mon CPU&nbsp;?</summary>
+            <ul>
+              <li>
+                <strong>Windows</strong> : Ctrl+Maj+Échap → onglet
+                <em>Performance</em> → <em>Processeur</em> (nom en haut à droite).
+              </li>
+              <li>Ou Win+R → <code>dxdiag</code> → ligne « Processeur ».</li>
+              <li>
+                <strong>macOS</strong> :  → À propos de ce Mac.
+              </li>
+            </ul>
+            <p>
+              Le score <strong>PassMark</strong> sert de référence théorique pour
+              repérer un PC bridé (EDR, VPN, throttling…).
+            </p>
+          </details>
+        </section>
+
+        <footer class="sidebar__footer">
+          <p>
+            Pour mesurer l'impact d'un <strong>EDR</strong> ou d'un
+            <strong>VPN</strong>, lancez un test <em>avec</em> puis
+            <em>sans</em>, et comparez les deux runs.
+          </p>
+        </footer>
+      </aside>
+
+      <!-- ===================== MAIN ===================== -->
+      <main class="main">
+        <div class="main__toolbar">
+          <button id="run-btn" class="btn btn--primary" type="button">
+            ▶ Lancer le test complet
+          </button>
+          <label class="duration-field">
+            Intensité
+            <select id="intensity-select">
+              <option value="light">Légère (rapide)</option>
+              <option value="normal" selected>Normale</option>
+              <option value="heavy">Lourde (long)</option>
+            </select>
+          </label>
+          <div id="run-status" class="run-status" role="status" aria-live="polite"></div>
+        </div>
+
+        <div id="results" class="results">
+          <!-- Benchmark cards injected here -->
+        </div>
+
+        <section class="compare" id="compare-section" hidden>
+          <div class="compare__header">
+            <h2>Comparaison des runs</h2>
+            <button id="clear-history-btn" class="btn btn--ghost" type="button">
+              Effacer l'historique
+            </button>
+          </div>
+          <div class="compare__table-wrap">
+            <table id="compare-table" class="compare__table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="compare__hint">
+            Astuce : nommez vos runs (ex. « EDR ON », « VPN ON », « baseline »)
+            pour les retrouver facilement.
+          </p>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

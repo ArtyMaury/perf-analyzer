@@ -1,0 +1,20 @@
+{
+  "name": "perf-analyzer",
+  "version": "1.0.0",
+  "description": "Web app to benchmark a PC and highlight EDR/VPN impact (CPU, Disk, RAM, Network)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "vite build && wrangler pages deploy dist --project-name perf-analyzer",
+    "cf:login": "wrangler login",
+    "db:migrate": "wrangler d1 execute perf-analyzer-db --remote --file=./schema.sql",
+    "db:migrate:local": "wrangler d1 execute perf-analyzer-db --local --file=./schema.sql",
+    "dev:full": "wrangler pages dev -- npm run dev"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10",
+    "wrangler": "^3.90.0"
+  }
+}
