@@ -20,31 +20,32 @@
  * If no data: { ok: true, count: 0, baselineScore: null }
  */
 
-import { json, handleOptions, str } from "./_shared.js";
+import { json, handleOptions, originOf, str } from "./_shared.js";
 
 const SAMPLE_LIMIT = 500;
 const LOW_OUTLIER_FRACTION = 0.7;
 const ALLOWED_METRICS = new Set(["disk", "ram"]);
 
-export async function onRequestOptions() {
-  return handleOptions();
+export async function onRequestOptions({ request }) {
+  return handleOptions(request);
 }
 
 export async function onRequestGet(context) {
   const { request, env } = context;
+  const origin = originOf(request);
 
   if (!env.DB) {
-    return json({ ok: false, error: "Base de données non configurée." }, 500);
+    return json({ ok: false, error: "Base de données non configurée." }, 500, origin);
   }
 
   const url = new URL(request.url);
   const metric = str(url.searchParams.get("metric"), 16);
   const groupKey = str(url.searchParams.get("group"), 80);
   if (!metric || !ALLOWED_METRICS.has(metric)) {
-    return json({ ok: false, error: "Métrique invalide (disk|ram)." }, 400);
+    return json({ ok: false, error: "Métrique invalide (disk|ram)." }, 400, origin);
   }
   if (!groupKey) {
-    return json({ ok: false, error: "Paramètre 'group' requis." }, 400);
+    return json({ ok: false, error: "Paramètre 'group' requis." }, 400, origin);
   }
 
   let rows;
@@ -60,7 +61,7 @@ export async function onRequestGet(context) {
     rows = res.results || [];
   } catch (e) {
     console.error("metric-baseline query failed", e);
-    return json({ ok: false, error: "Échec de lecture." }, 500);
+    return json({ ok: false, error: "Échec de lecture." }, 500, origin);
   }
 
   if (rows.length === 0) {
@@ -72,7 +73,7 @@ export async function onRequestGet(context) {
       baselineScore: null,
       rawAvgScore: null,
       unit: null,
-    });
+    }, 200, origin);
   }
 
   const scores = rows.map((r) => r.score).filter((v) => v > 0);
@@ -95,7 +96,7 @@ export async function onRequestGet(context) {
     rawAvgScore: round(rawAvg, 2),
     keptSamples: kept.length,
     unit,
-  });
+  }, 200, origin);
 }
 
 // --- stats helpers ---------------------------------------------------------

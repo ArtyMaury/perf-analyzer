@@ -17,34 +17,35 @@
  * Returns: { ok, inserted, count } where count = total runs for that CPU.
  */
 
-import { json, handleOptions, num, str } from "./_shared.js";
+import { json, handleOptions, originOf, num, str } from "./_shared.js";
 
 const MAX_BODY = 4 * 1024; // 4 KB is plenty
 const RATE_WINDOW_MS = 60_000; // 1 minute
 const RATE_MAX_PER_WINDOW = 5; // max submissions per client/min
 
-export async function onRequestOptions() {
-  return handleOptions();
+export async function onRequestOptions({ request }) {
+  return handleOptions(request);
 }
 
 export async function onRequestPost(context) {
   const { request, env } = context;
+  const origin = originOf(request);
 
   if (!env.DB) {
-    return json({ ok: false, error: "Base de données non configurée." }, 500);
+    return json({ ok: false, error: "Base de données non configurée." }, 500, origin);
   }
 
   // Reject oversized bodies early.
   const len = parseInt(request.headers.get("content-length") || "0", 10);
   if (len > MAX_BODY) {
-    return json({ ok: false, error: "Payload trop volumineux." }, 413);
+    return json({ ok: false, error: "Payload trop volumineux." }, 413, origin);
   }
 
   let body;
   try {
     body = await request.json();
   } catch {
-    return json({ ok: false, error: "JSON invalide." }, 400);
+    return json({ ok: false, error: "JSON invalide." }, 400, origin);
   }
 
   // --- Validate required fields ---
@@ -54,15 +55,16 @@ export async function onRequestPost(context) {
   if (!cpuName || !cpuMark || !mops) {
     return json(
       { ok: false, error: "Champs requis manquants (cpuName, cpuMark, mops)." },
-      400
+      400,
+      origin
     );
   }
   // Sanity bounds: reject obviously bogus values.
   if (cpuMark < 100 || cpuMark > 500_000) {
-    return json({ ok: false, error: "cpuMark hors limites." }, 400);
+    return json({ ok: false, error: "cpuMark hors limites." }, 400, origin);
   }
   if (mops <= 0 || mops > 1_000_000) {
-    return json({ ok: false, error: "mops hors limites." }, 400);
+    return json({ ok: false, error: "mops hors limites." }, 400, origin);
   }
 
   const cpuMs = num(body.cpuMs);
@@ -71,19 +73,23 @@ export async function onRequestPost(context) {
   const deviceMemory = num(body.deviceMemory);
   const clientId = str(body.clientId, 64) || "anon";
   const ua = str(request.headers.get("user-agent") || "", 180);
+  // Rate-limit key: trust the network-level client IP, not the client-supplied
+  // id alone (which an attacker can randomize to bypass the limit).
+  const ip = str(request.headers.get("CF-Connecting-IP") || "", 64) || "noip";
   const now = Date.now();
 
-  // --- Light rate-limit: count this client's recent inserts ---
+  // --- Light rate-limit: count this IP's recent inserts ---
   try {
     const recent = await env.DB.prepare(
-      "SELECT COUNT(*) AS c FROM runs WHERE client_id = ? AND created_at > ?"
+      "SELECT COUNT(*) AS c FROM runs WHERE ip = ? AND created_at > ?"
     )
-      .bind(clientId, now - RATE_WINDOW_MS)
+      .bind(ip, now - RATE_WINDOW_MS)
       .first();
     if (recent && recent.c >= RATE_MAX_PER_WINDOW) {
       return json(
         { ok: false, error: "Trop de soumissions, réessayez dans une minute." },
-        429
+        429,
+        origin
       );
     }
   } catch (e) {
@@ -95,8 +101,8 @@ export async function onRequestPost(context) {
   try {
     await env.DB.prepare(
       `INSERT INTO runs
-        (cpu_name, cpu_mark, mops, cpu_ms, intensity, threads, device_memory, ua, client_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (cpu_name, cpu_mark, mops, cpu_ms, intensity, threads, device_memory, ua, client_id, ip, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         cpuName,
@@ -108,12 +114,13 @@ export async function onRequestPost(context) {
         deviceMemory,
         ua,
         clientId,
+        ip,
         now
       )
       .run();
   } catch (e) {
     console.error("insert failed", e);
-    return json({ ok: false, error: "Échec d'enregistrement." }, 500);
+    return json({ ok: false, error: "Échec d'enregistrement." }, 500, origin);
   }
 
   // Return the updated count for this CPU.
@@ -129,5 +136,5 @@ export async function onRequestPost(context) {
     /* ignore */
   }
 
-  return json({ ok: true, inserted: true, count });
+  return json({ ok: true, inserted: true, count }, 200, origin);
 }

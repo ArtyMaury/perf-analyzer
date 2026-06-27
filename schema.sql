@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS runs (
   threads       INTEGER,                    -- navigator.hardwareConcurrency
   device_memory REAL,                       -- navigator.deviceMemory (approx GB)
   ua            TEXT,                        -- trimmed user-agent (context only)
-  client_id     TEXT,                       -- random per-browser id (dedupe/rate context)
+  client_id     TEXT,                       -- random per-browser id (dedupe context)
+  ip            TEXT,                        -- network client IP (rate-limit only)
   created_at    INTEGER NOT NULL            -- unix ms
 );
 
@@ -24,8 +25,8 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_runs_cpu ON runs (cpu_name);
 CREATE INDEX IF NOT EXISTS idx_runs_cpu_created ON runs (cpu_name, created_at);
 
--- Lightweight rate-limiting / dedupe helper: recent submissions per client.
-CREATE INDEX IF NOT EXISTS idx_runs_client_created ON runs (client_id, created_at);
+-- Lightweight rate-limiting helper: recent submissions per IP.
+CREATE INDEX IF NOT EXISTS idx_runs_ip_created ON runs (ip, created_at);
 
 -- ---------------------------------------------------------------------------
 -- Generic metric runs (disk / RAM).
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS metric_runs (
   os            TEXT,                          -- detected OS family (context)
   ua            TEXT,                          -- trimmed user-agent (context only)
   client_id     TEXT,                          -- random per-browser id
+  ip            TEXT,                          -- network client IP (rate-limit only)
   created_at    INTEGER NOT NULL               -- unix ms
 );
 
@@ -56,6 +58,6 @@ CREATE TABLE IF NOT EXISTS metric_runs (
 CREATE INDEX IF NOT EXISTS idx_metric_runs_lookup
   ON metric_runs (metric, group_key, created_at);
 
--- Rate-limit / dedupe helper for the generic table.
-CREATE INDEX IF NOT EXISTS idx_metric_runs_client_created
-  ON metric_runs (client_id, created_at);
+-- Rate-limit helper for the generic table (recent submissions per IP).
+CREATE INDEX IF NOT EXISTS idx_metric_runs_ip_created
+  ON metric_runs (ip, created_at);
