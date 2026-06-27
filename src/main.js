@@ -8,6 +8,8 @@ import {
 import { BENCHMARKS } from "./benchmarks.js";
 import { loadCpuDb, searchCpu, findCpuByName, cpuDbSize } from "./cpu-db.js";
 import {
+  loadMyCpu,
+  saveMyCpu,
   updateBaseline,
   computeHealth,
   updateMetricBaseline,
@@ -24,11 +26,10 @@ import {
 // State
 // ===========================================================================
 const HISTORY_KEY = "perf-analyzer.history.v1";
-const CPU_SEL_KEY = "perf-analyzer.selected-cpu.v1";
 /** @type {Array<{ id:string, name:string, when:number, intensity:string, cpu?:object, results:Record<string, any> }>} */
 let history = loadHistory();
 /** @type {{ n:string, m:number, v:string } | null} */
-let selectedCpu = loadSelectedCpu();
+let selectedCpu = loadMyCpu();
 
 const el = {
   specsList: document.getElementById("specs-list"),
@@ -167,7 +168,7 @@ function highlightSuggestion() {
 function chooseCpu(entry) {
   if (!entry) return;
   selectedCpu = { n: entry.n, m: entry.m, v: entry.v };
-  saveSelectedCpu();
+  saveMyCpu(selectedCpu);
   el.cpuSearch.value = "";
   el.cpuSuggestions.hidden = true;
   renderSelectedCpu();
@@ -188,28 +189,12 @@ function renderSelectedCpu() {
   `;
   el.cpuSelected.querySelector(".clear").addEventListener("click", () => {
     selectedCpu = null;
-    saveSelectedCpu();
+    saveMyCpu(null);
     renderSelectedCpu();
   });
 }
 
-function loadSelectedCpu() {
-  try {
-    const raw = localStorage.getItem(CPU_SEL_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
 
-function saveSelectedCpu() {
-  try {
-    if (selectedCpu) localStorage.setItem(CPU_SEL_KEY, JSON.stringify(selectedCpu));
-    else localStorage.removeItem(CPU_SEL_KEY);
-  } catch {
-    /* ignore */
-  }
-}
 
 // ===========================================================================
 // Specs sidebar
@@ -319,13 +304,15 @@ function renderHealthBadge(key, health) {
     health.verdict === "baseline" ? "◆" : health.verdict === "ok" ? "✓" : "▼";
   badge.textContent = `${arrow} Indice ${pct} — ${label}`;
   const base = health.baseline || {};
-  if (base.cpuName != null) {
-    // CPU baseline (per model).
+  if (base.cpuName != null && base.cpuMark) {
+    // CPU baseline (cross-CPU normalized via PassMark).
     badge.title =
-      `Efficacité = perf mesurée / meilleure perf observée pour « ${base.cpuName} ».\n` +
-      `Baseline: ${Number(base.measuredMops || 0).toFixed(1)} Mops/s. ` +
-      `PassMark réf: ${Number(base.cpuMark || 0).toLocaleString("fr-FR")}.`;
-  } else {
+      `Rendement normalisé (mops / PassMark) vs meilleure référence.\n` +
+      `Réf: « ${base.cpuName} » (PassMark ${Number(base.cpuMark).toLocaleString("fr-FR")}) ` +
+      `— ${Number(base.measuredMops || 0).toFixed(1)} Mops/s.\n` +
+      `Rendement réf: ${((base.yield || base.measuredMops / base.cpuMark) * 1000).toFixed(3)} ` +
+      `mMops/Mark.`;
+  } else if (base.score != null) {
     // Generic metric baseline (disk/RAM): best throughput seen on this machine.
     badge.title =
       `Efficacité = perf mesurée / meilleure perf observée sur ce PC.\n` +
@@ -406,12 +393,14 @@ async function runAll() {
       setCardProgress(key, 1);
       runResults[key] = serializeResult(result);
 
-      // CPU health index: compare measured throughput to the per-CPU baseline.
+      // CPU health index: compare measured throughput using PassMark-normalized
+      // yield against the best reference (cross-CPU comparison).
       if (key === "cpu" && selectedCpu) {
         const measured = { mops: result.mops, ms: result.durationMs };
-        // Establish/refresh the LOCAL baseline (best run = healthy potential).
+        // Establish/refresh the LOCAL baseline (best run for this CPU model).
         updateBaseline(selectedCpu.n, selectedCpu.m, measured);
-        const health = computeHealth(selectedCpu.n, measured);
+        // Compute health via normalized yield comparison (cross-CPU).
+        const health = computeHealth(selectedCpu.m, measured);
         if (health) {
           renderHealthBadge(key, health);
           runResults[key].health = {
@@ -572,14 +561,58 @@ async function showCommunityPanel(measurement) {
   wireContribute(panel, measurement);
 }
 
+// ===========================================================================
+// Confirmation modal for contributions
+// ===========================================================================
+function showConfirmModal(title, message, onConfirm) {
+  // Remove any existing modal
+  const existing = document.querySelector(".confirm-modal-overlay");
+  if (existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.className = "confirm-modal-overlay";
+  overlay.innerHTML = `
+    <div class="confirm-modal">
+      <h3 class="confirm-modal__title">${title}</h3>
+      <p class="confirm-modal__message">${message}</p>
+      <div class="confirm-modal__actions">
+        <button class="btn btn--ghost confirm-modal__cancel">Annuler</button>
+        <button class="btn confirm-modal__confirm">Confirmer et envoyer</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  const cancelBtn = overlay.querySelector(".confirm-modal__cancel");
+  const confirmBtn = overlay.querySelector(".confirm-modal__confirm");
+
+  function close() {
+    overlay.remove();
+  }
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  cancelBtn.addEventListener("click", close);
+  confirmBtn.addEventListener("click", () => {
+    close();
+    onConfirm();
+  });
+
+  // Close on Escape
+  function onKey(e) {
+    if (e.key === "Escape") {
+      close();
+      document.removeEventListener("keydown", onKey);
+    }
+  }
+  document.addEventListener("keydown", onKey);
+}
+
 function renderContributeBlock(measurement, count) {
   return `
     <div class="community__contribute">
-      <label class="community__optin">
-        <input type="checkbox" id="contribute-confirm" />
-        <span>Ce PC est <strong>sain</strong> (pas d'EDR/VPN/throttling actif)</span>
-      </label>
-      <button class="btn btn--ghost community__btn" id="contribute-btn" disabled>
+      <button class="btn btn--ghost community__btn" id="contribute-btn">
         Contribuer ce résultat
       </button>
       <p class="community__note">
@@ -592,41 +625,41 @@ function renderContributeBlock(measurement, count) {
 }
 
 function wireContribute(panel, measurement) {
-  const checkbox = panel.querySelector("#contribute-confirm");
   const btn = panel.querySelector("#contribute-btn");
   const status = panel.querySelector("#contribute-status");
-  if (!checkbox || !btn) return;
+  if (!btn) return;
 
-  checkbox.addEventListener("change", () => {
-    btn.disabled = !checkbox.checked;
-  });
+  btn.addEventListener("click", () => {
+    showConfirmModal(
+      "Confirmer la contribution",
+      "Ce PC est <strong>sain</strong> (pas d'EDR, VPN, throttling ou autre facteur limitant actif).",
+      async () => {
+        btn.disabled = true;
+        status.textContent = "Envoi…";
 
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    checkbox.disabled = true;
-    status.textContent = "Envoi…";
+        const specs = await getContextSpecs();
+        const res = await submitRun({
+          cpuName: measurement.cpuName,
+          cpuMark: measurement.cpuMark,
+          mops: measurement.mops,
+          cpuMs: measurement.cpuMs,
+          intensity: measurement.intensity,
+          threads: specs.threads,
+          deviceMemory: specs.deviceMemory,
+        });
 
-    const specs = await getContextSpecs();
-    const res = await submitRun({
-      cpuName: measurement.cpuName,
-      cpuMark: measurement.cpuMark,
-      mops: measurement.mops,
-      cpuMs: measurement.cpuMs,
-      intensity: measurement.intensity,
-      threads: specs.threads,
-      deviceMemory: specs.deviceMemory,
-    });
-
-    if (res.ok) {
-      status.innerHTML = `<span style="color:var(--good)">✓ Merci ! ${
-        res.count ? res.count + " run(s) pour ce CPU." : ""
-      }</span>`;
-    } else {
-      status.innerHTML = `<span style="color:var(--bad)">Échec : ${escapeHtml(
-        res.error || "inconnu"
-      )}</span>`;
-      checkbox.disabled = false;
-    }
+        if (res.ok) {
+          status.innerHTML = `<span style="color:var(--good)">✓ Merci ! ${
+            res.count ? res.count + " run(s) pour ce CPU." : ""
+          }</span>`;
+        } else {
+          status.innerHTML = `<span style="color:var(--bad)">Échec : ${escapeHtml(
+            res.error || "inconnu"
+          )}</span>`;
+          btn.disabled = false;
+        }
+      }
+    );
   });
 }
 
@@ -705,11 +738,7 @@ async function showMetricCommunityPanel(metric, measurement, ctx) {
 function renderMetricContributeBlock(metric, groupLabel) {
   return `
     <div class="community__contribute">
-      <label class="community__optin">
-        <input type="checkbox" class="metric-contribute-confirm" />
-        <span>Ce PC est <strong>sain</strong> (pas d'EDR/VPN/throttling actif)</span>
-      </label>
-      <button class="btn btn--ghost community__btn metric-contribute-btn" disabled>
+      <button class="btn btn--ghost community__btn metric-contribute-btn">
         Contribuer ce résultat
       </button>
       <p class="community__note">
@@ -721,42 +750,42 @@ function renderMetricContributeBlock(metric, groupLabel) {
 }
 
 function wireMetricContribute(panel, metric, measurement, ctx, groupKey) {
-  const checkbox = panel.querySelector(".metric-contribute-confirm");
   const btn = panel.querySelector(".metric-contribute-btn");
   const status = panel.querySelector(".metric-contribute-status");
-  if (!checkbox || !btn) return;
+  if (!btn) return;
 
-  checkbox.addEventListener("change", () => {
-    btn.disabled = !checkbox.checked;
-  });
+  btn.addEventListener("click", () => {
+    showConfirmModal(
+      "Confirmer la contribution",
+      "Ce PC est <strong>sain</strong> (pas d'EDR, VPN, throttling ou autre facteur limitant actif).",
+      async () => {
+        btn.disabled = true;
+        status.textContent = "Envoi…";
 
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    checkbox.disabled = true;
-    status.textContent = "Envoi…";
+        const res = await submitMetricRun({
+          metric,
+          groupKey,
+          score: measurement.score,
+          unit: measurement.unit,
+          readScore: measurement.readScore,
+          intensity: measurement.intensity,
+          threads: ctx.threads,
+          deviceMemory: ctx.deviceMemory,
+          os: ctx.os,
+        });
 
-    const res = await submitMetricRun({
-      metric,
-      groupKey,
-      score: measurement.score,
-      unit: measurement.unit,
-      readScore: measurement.readScore,
-      intensity: measurement.intensity,
-      threads: ctx.threads,
-      deviceMemory: ctx.deviceMemory,
-      os: ctx.os,
-    });
-
-    if (res.ok) {
-      status.innerHTML = `<span style="color:var(--good)">✓ Merci ! ${
-        res.count ? res.count + " run(s) pour ce groupe." : ""
-      }</span>`;
-    } else {
-      status.innerHTML = `<span style="color:var(--bad)">Échec : ${escapeHtml(
-        res.error || "inconnu"
-      )}</span>`;
-      checkbox.disabled = false;
-    }
+        if (res.ok) {
+          status.innerHTML = `<span style="color:var(--good)">✓ Merci ! ${
+            res.count ? res.count + " run(s) pour ce groupe." : ""
+          }</span>`;
+        } else {
+          status.innerHTML = `<span style="color:var(--bad)">Échec : ${escapeHtml(
+            res.error || "inconnu"
+          )}</span>`;
+          btn.disabled = false;
+        }
+      }
+    );
   });
 }
 

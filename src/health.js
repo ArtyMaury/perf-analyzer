@@ -5,35 +5,70 @@
  * hardware *should* deliver — a signature of an EDR, VPN, thermal throttling,
  * a power-saving plan, etc.
  *
- * We deliberately use a RELATIVE baseline per CPU model, because the in-browser
- * JS benchmark is NOT directly comparable to PassMark's native CPU Mark (JS vs
- * native, single-loop vs multi-threaded mixed workload). Calibrating an absolute
- * JS->PassMark constant is unreliable.
+ * How it works (PassMark-normalized, cross-CPU):
+ *  - Every clean run is stored as a baseline: { cpuName, cpuMark, measuredMops }.
+ *  - The "normalized yield" of a run = measuredMops / cpuMark.
+ *    This allows comparison across DIFFERENT CPUs: a healthy machine should
+ *    achieve a yield proportional to its PassMark rating.
+ *  - The BEST normalized yield ever observed (across all CPUs) is the reference.
+ *  - Every new run's yield is compared to the best reference yield:
+ *      efficiency = (mops / cpuMark) / bestYield
+ *  - If a powerful CPU (high cpuMark) has a low yield relative to the best
+ *    reference, it means the machine is under-performing → EDR/VPN/throttling.
  *
- * How it works:
- *  - The FIRST clean run for a given CPU model establishes a baseline
- *    (the measured CPU score we expect from a healthy machine with that CPU).
- *  - Every later run is expressed as efficiency = measured / baseline.
- *  - We ALSO show, for context, the PassMark CPU Mark of that CPU so the user
- *    can sanity-check that two different machines rank as expected.
- *
- * The PassMark score is used in two ways:
- *  1) As reference context (display + relative ranking between CPU models).
- *  2) Optionally, to normalize the baseline: if you benchmark CPU A (PassMark
- *     20000) and CPU B (PassMark 40000), B's measured score should be ~2x A's.
- *     A large deviation from the PassMark-implied ratio flags an anomaly.
+ * Example:
+ *  - Reference: CPU Mark 6500, measured 30 Mops → yield = 30/6500 = 0.00461
+ *  - Test: CPU Mark 23000, measured 20 Mops → yield = 20/23000 = 0.00087
+ *  - Efficiency = 0.00087 / 0.00461 = 18.8% → clearly degraded.
  */
 
-const BASELINE_KEY = "perf-analyzer.cpu-baselines.v1";
+const BASELINE_KEY = "perf-analyzer.cpu-baselines.v2";
+const MY_CPU_KEY = "perf-analyzer.my-cpu.v1";
 
 /**
  * @typedef {Object} CpuBaseline
  * @property {string} cpuName
- * @property {number} cpuMark        PassMark multi-thread score (reference)
- * @property {number} measuredMops   measured JS throughput baseline (Mops/s)
- * @property {number} measuredMs     measured CPU time baseline (ms, lower=better)
+ * @property {number} cpuMark        PassMark multi-thread score
+ * @property {number} measuredMops   best measured JS throughput (Mops/s)
+ * @property {number} measuredMs     best measured CPU time (ms, lower=better)
+ * @property {number} yield          normalized yield = measuredMops / cpuMark
  * @property {number} when           timestamp
  */
+
+// ===========================================================================
+// "My CPU" — the CPU of the current PC, persisted in localStorage.
+// ===========================================================================
+
+/**
+ * Load the saved CPU for this PC.
+ * @returns {{ n:string, m:number, v:string } | null}
+ */
+export function loadMyCpu() {
+  try {
+    const raw = localStorage.getItem(MY_CPU_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save the CPU of this PC to localStorage.
+ * @param {{ n:string, m:number, v:string } | null} cpu
+ */
+export function saveMyCpu(cpu) {
+  try {
+    if (cpu) localStorage.setItem(MY_CPU_KEY, JSON.stringify(cpu));
+    else localStorage.removeItem(MY_CPU_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+// ===========================================================================
+// CPU baselines — keyed by CPU name, stores the best run per CPU model.
+// The "best reference" is whichever baseline has the highest normalized yield.
+// ===========================================================================
 
 /** @returns {Record<string, CpuBaseline>} keyed by normalized cpuName */
 export function loadBaselines() {
@@ -58,110 +93,107 @@ function keyOf(cpuName) {
 }
 
 /**
- * Record a baseline for a CPU if none exists yet, OR if this run is clearly
- * better (we assume the best observed run ≈ the "healthy" potential).
+ * Find the baseline with the best normalized yield (mops / cpuMark).
+ * This is the "gold standard" reference against which all runs are compared.
+ *
+ * @returns {CpuBaseline | null}
+ */
+export function getBestReference() {
+  const map = loadBaselines();
+  let best = null;
+  for (const entry of Object.values(map)) {
+    if (!entry.cpuMark || entry.cpuMark <= 0) continue;
+    const y = entry.yield ?? entry.measuredMops / entry.cpuMark;
+    if (!best || y > (best.yield ?? best.measuredMops / best.cpuMark)) {
+      best = entry;
+    }
+  }
+  return best;
+}
+
+/**
+ * Record a baseline for a CPU if none exists yet, OR if this run is better
+ * (highest mops for that CPU model). The best run ≈ the healthy potential.
  *
  * @param {string} cpuName
  * @param {number} cpuMark
  * @param {{ mops:number, ms:number }} measured
- * @returns {CpuBaseline} the (possibly updated) baseline now in effect
+ * @returns {CpuBaseline} the (possibly updated) baseline for that CPU
  */
 export function updateBaseline(cpuName, cpuMark, measured) {
-  if (!cpuName) return null;
+  if (!cpuName || !cpuMark || cpuMark <= 0) return null;
   const map = loadBaselines();
   const k = keyOf(cpuName);
   const existing = map[k];
 
-  // Use the BEST (highest mops / lowest ms) run as the baseline, on the
-  // assumption that the fastest clean run reflects the hardware's potential
-  // and slower runs indicate something throttling it.
+  // Use the BEST (highest mops) run as the baseline for this CPU model.
   if (!existing || measured.mops > existing.measuredMops) {
     map[k] = {
       cpuName,
-      cpuMark: cpuMark || (existing ? existing.cpuMark : 0),
+      cpuMark,
       measuredMops: measured.mops,
       measuredMs: measured.ms,
+      yield: measured.mops / cpuMark,
       when: Date.now(),
     };
     saveBaselines(map);
   } else if (cpuMark && !existing.cpuMark) {
     // Backfill PassMark score if we now know it.
     existing.cpuMark = cpuMark;
+    existing.yield = existing.measuredMops / cpuMark;
     saveBaselines(map);
   }
-  return map[keyOf(cpuName)];
+  return map[k];
 }
 
 /**
- * Compute the health index for a measured run against its baseline.
+ * Compute the health index for a measured run using PassMark-normalized
+ * comparison against the best reference (cross-CPU).
  *
- * @param {string} cpuName
+ * The logic: yield = mops / cpuMark. We compare this run's yield to the
+ * best yield ever observed. If a powerful CPU under-performs its PassMark
+ * rating relative to the best reference, it's flagged.
+ *
+ * @param {number} cpuMark  PassMark score of the current CPU
  * @param {{ mops:number, ms:number }} measured
  * @returns {null | {
- *   efficiency: number,        // measured/baseline, 1.0 == as good as best run
+ *   efficiency: number,        // currentYield / bestYield, 1.0 == matches best
  *   percent: number,           // efficiency * 100
  *   verdict: 'ok'|'slight'|'degraded'|'baseline',
- *   baseline: CpuBaseline
+ *   baseline: CpuBaseline,
+ *   currentYield: number,
+ *   bestYield: number
  * }}
  */
-export function computeHealth(cpuName, measured) {
-  if (!cpuName) return null;
-  const map = loadBaselines();
-  const base = map[keyOf(cpuName)];
-  if (!base) return null;
+export function computeHealth(cpuMark, measured) {
+  if (!cpuMark || cpuMark <= 0 || !measured?.mops) return null;
 
-  // If this run IS the baseline (same best mops), report 'baseline'.
-  if (measured.mops >= base.measuredMops) {
+  const best = getBestReference();
+  if (!best) return null;
+
+  const bestYield = best.yield ?? best.measuredMops / best.cpuMark;
+  const currentYield = measured.mops / cpuMark;
+
+  // If this run has a yield >= the best reference, it becomes the new best.
+  if (currentYield >= bestYield) {
     return {
       efficiency: 1,
       percent: 100,
       verdict: "baseline",
-      baseline: base,
+      baseline: best,
+      currentYield,
+      bestYield: currentYield,
     };
   }
 
-  const efficiency = measured.mops / base.measuredMops;
+  const efficiency = currentYield / bestYield;
   const percent = efficiency * 100;
   let verdict;
   if (percent >= 92) verdict = "ok";
   else if (percent >= 75) verdict = "slight";
   else verdict = "degraded";
 
-  return { efficiency, percent, verdict, baseline: base };
-}
-
-/**
- * Cross-CPU sanity check: given the measured score and the PassMark of THIS
- * cpu, plus a reference baseline from ANOTHER healthy cpu, does the measured
- * performance roughly track the PassMark ratio?
- *
- * Returns an "expected vs observed" ratio. ~1.0 means the machine performs in
- * line with its PassMark rank relative to the reference; <1 means it under-
- * performs what its silicon should deliver (the anomaly the user wants to spot).
- *
- * @param {{ cpuMark:number, mops:number }} current
- * @param {{ cpuMark:number, mops:number }} reference  a known-healthy machine
- * @returns {null | { expectedMops:number, observedRatio:number, percentOfExpected:number }}
- */
-export function crossCheckAgainstReference(current, reference) {
-  if (
-    !current?.cpuMark ||
-    !reference?.cpuMark ||
-    !reference?.mops ||
-    reference.cpuMark <= 0
-  ) {
-    return null;
-  }
-  // If PassMark says current is X times the reference, we expect its measured
-  // throughput to be ~X times the reference's measured throughput.
-  const passmarkRatio = current.cpuMark / reference.cpuMark;
-  const expectedMops = reference.mops * passmarkRatio;
-  const observedRatio = current.mops / expectedMops;
-  return {
-    expectedMops,
-    observedRatio,
-    percentOfExpected: observedRatio * 100,
-  };
+  return { efficiency, percent, verdict, baseline: best, currentYield, bestYield };
 }
 
 export function clearBaselines() {
