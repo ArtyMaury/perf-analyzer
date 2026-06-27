@@ -7,8 +7,18 @@ import {
 } from "./config.js";
 import { BENCHMARKS } from "./benchmarks.js";
 import { loadCpuDb, searchCpu, findCpuByName, cpuDbSize } from "./cpu-db.js";
-import { updateBaseline, computeHealth } from "./health.js";
-import { submitRun, fetchBaseline } from "./api.js";
+import {
+  updateBaseline,
+  computeHealth,
+  updateMetricBaseline,
+  computeMetricHealth,
+} from "./health.js";
+import {
+  submitRun,
+  fetchBaseline,
+  submitMetricRun,
+  fetchMetricBaseline,
+} from "./api.js";
 
 // ===========================================================================
 // State
@@ -308,10 +318,19 @@ function renderHealthBadge(key, health) {
   const arrow =
     health.verdict === "baseline" ? "◆" : health.verdict === "ok" ? "✓" : "▼";
   badge.textContent = `${arrow} Indice ${pct} — ${label}`;
-  badge.title =
-    `Efficacité = perf mesurée / meilleure perf observée pour « ${health.baseline.cpuName} ».\n` +
-    `Baseline: ${health.baseline.measuredMops.toFixed(1)} Mops/s. ` +
-    `PassMark réf: ${health.baseline.cpuMark.toLocaleString("fr-FR")}.`;
+  const base = health.baseline || {};
+  if (base.cpuName != null) {
+    // CPU baseline (per model).
+    badge.title =
+      `Efficacité = perf mesurée / meilleure perf observée pour « ${base.cpuName} ».\n` +
+      `Baseline: ${Number(base.measuredMops || 0).toFixed(1)} Mops/s. ` +
+      `PassMark réf: ${Number(base.cpuMark || 0).toLocaleString("fr-FR")}.`;
+  } else {
+    // Generic metric baseline (disk/RAM): best throughput seen on this machine.
+    badge.title =
+      `Efficacité = perf mesurée / meilleure perf observée sur ce PC.\n` +
+      `Baseline: ${Number(base.score || 0).toFixed(1)} ${base.unit || ""}.`;
+  }
 
   // Insert before the progress bar.
   const progress = card.querySelector(".card__progress");
@@ -323,6 +342,35 @@ function renderHealthBadge(key, health) {
 // ===========================================================================
 let running = false;
 let lastCpuMeasurement = null;
+/** Per-metric measurements remembered for the community panel after a run. */
+let lastMetricMeasurements = {};
+
+// Config describing each "health-tracked" metric (disk/ram). Mirrors the CPU
+// path but generic: how to read the throughput score from a benchmark result,
+// its display unit, and the coarse key used to group community runs.
+const METRIC_HEALTH = {
+  disk: {
+    label: "SSD",
+    unit: "Mo/s",
+    // Throughput where higher = better.
+    score: (r) => r.writeMBps,
+    readScore: (r) => r.readMBps,
+    // No disk model is exposed: group community runs by OS family.
+    groupKey: (ctx) => `os:${ctx.os || "inconnu"}`,
+    groupLabel: (ctx) => ctx.os || "OS inconnu",
+  },
+  ram: {
+    label: "RAM",
+    unit: "Go/s",
+    score: (r) => r.writeGBps,
+    readScore: (r) => r.readGBps,
+    // No RAM model is exposed: group by approximate deviceMemory (GB).
+    groupKey: (ctx) =>
+      ctx.deviceMemory ? `mem:${ctx.deviceMemory}` : "mem:inconnu",
+    groupLabel: (ctx) =>
+      ctx.deviceMemory ? `≈ ${ctx.deviceMemory} Go RAM` : "RAM inconnue",
+  },
+};
 
 async function runAll() {
   if (running) return;
@@ -335,6 +383,8 @@ async function runAll() {
   renderResultCards();
 
   const runResults = {};
+  lastCpuMeasurement = null;
+  lastMetricMeasurements = {};
 
   for (const key of BENCH_ORDER) {
     const meta = BENCH_META[key];
@@ -381,6 +431,31 @@ async function runAll() {
           intensity,
         };
       }
+
+      // Disk / RAM health index: same logic as CPU but keyed per metric.
+      // Baseline = best throughput ever seen on THIS machine (healthy potential).
+      const mh = METRIC_HEALTH[key];
+      if (mh) {
+        const score = mh.score(result);
+        if (Number.isFinite(score)) {
+          updateMetricBaseline(key, { score, unit: mh.unit });
+          const health = computeMetricHealth(key, { score });
+          if (health) {
+            renderHealthBadge(key, health);
+            runResults[key].health = {
+              percent: health.percent,
+              verdict: health.verdict,
+            };
+          }
+          lastMetricMeasurements[key] = {
+            metric: key,
+            score,
+            readScore: mh.readScore ? mh.readScore(result) : null,
+            unit: mh.unit,
+            intensity,
+          };
+        }
+      }
     } catch (err) {
       const skipped = !!err.skipped;
       setCardError(key, err.message + (err.details ? ` (${err.details})` : ""), skipped);
@@ -416,6 +491,15 @@ async function runAll() {
   // contribute this run (opt-in) if a CPU was selected.
   if (lastCpuMeasurement) {
     showCommunityPanel(lastCpuMeasurement);
+  }
+
+  // Same community comparison for disk/RAM (grouped by OS / RAM size).
+  const metricKeys = Object.keys(lastMetricMeasurements);
+  if (metricKeys.length) {
+    const ctx = await getContextSpecs();
+    for (const key of metricKeys) {
+      showMetricCommunityPanel(key, lastMetricMeasurements[key], ctx);
+    }
   }
 }
 
@@ -546,11 +630,165 @@ function wireContribute(panel, measurement) {
   });
 }
 
+// ===========================================================================
+// Community baseline panel for disk / RAM (generic metric endpoint).
+// ===========================================================================
+async function showMetricCommunityPanel(metric, measurement, ctx) {
+  const meta = METRIC_HEALTH[metric];
+  const card = document.getElementById(`card-${metric}`);
+  if (!card || !meta) return;
+
+  const prev = card.querySelector(".community");
+  if (prev) prev.remove();
+
+  const panel = document.createElement("div");
+  panel.className = "community";
+  panel.innerHTML = `<div class="community__loading">Comparaison communautaire…</div>`;
+  card.appendChild(panel);
+
+  const groupKey = meta.groupKey(ctx);
+  const groupLabel = meta.groupLabel(ctx);
+  const data = await fetchMetricBaseline(metric, groupKey);
+
+  if (!data) {
+    panel.innerHTML = `
+      <div class="community__row">
+        <span class="community__label">Baseline communautaire</span>
+        <span class="community__muted">indisponible</span>
+      </div>
+      ${renderMetricContributeBlock(metric, groupLabel)}`;
+    wireMetricContribute(panel, metric, measurement, ctx, groupKey);
+    return;
+  }
+
+  let comparisonHtml = "";
+  if (data.count > 0 && data.baselineScore) {
+    const eff = (measurement.score / data.baselineScore) * 100;
+    const verdict = eff >= 92 ? "ok" : eff >= 75 ? "slight" : "degraded";
+    const label =
+      verdict === "ok"
+        ? "Conforme à la communauté"
+        : verdict === "slight"
+        ? "Sous la moyenne"
+        : "Nettement sous la moyenne — bridage probable";
+    const unit = data.unit || meta.unit;
+    comparisonHtml = `
+      <div class="community__row">
+        <span class="community__label">vs communauté (${data.count} run${
+      data.count > 1 ? "s" : ""
+    }, ${escapeHtml(groupLabel)})</span>
+        <span class="health-badge" data-verdict="${verdict}">${eff.toFixed(
+      0
+    )}% — ${label}</span>
+      </div>
+      <div class="community__detail">
+        Réf. communautaire : ${data.baselineScore.toFixed(
+          1
+        )} ${unit} · votre run : ${measurement.score.toFixed(1)} ${unit}
+      </div>`;
+  } else {
+    comparisonHtml = `
+      <div class="community__row">
+        <span class="community__label">Baseline communautaire (${escapeHtml(
+          groupLabel
+        )})</span>
+        <span class="community__muted">aucune donnée</span>
+      </div>
+      <div class="community__detail">Soyez le premier à contribuer une référence saine.</div>`;
+  }
+
+  panel.innerHTML =
+    comparisonHtml + renderMetricContributeBlock(metric, groupLabel);
+  wireMetricContribute(panel, metric, measurement, ctx, groupKey);
+}
+
+function renderMetricContributeBlock(metric, groupLabel) {
+  return `
+    <div class="community__contribute">
+      <label class="community__optin">
+        <input type="checkbox" class="metric-contribute-confirm" />
+        <span>Ce PC est <strong>sain</strong> (pas d'EDR/VPN/throttling actif)</span>
+      </label>
+      <button class="btn btn--ghost community__btn metric-contribute-btn" disabled>
+        Contribuer ce résultat
+      </button>
+      <p class="community__note">
+        Anonyme. Aide à établir la référence « ${escapeHtml(groupLabel)} ».
+        Ne partagez que des runs propres.
+      </p>
+      <div class="community__status metric-contribute-status" aria-live="polite"></div>
+    </div>`;
+}
+
+function wireMetricContribute(panel, metric, measurement, ctx, groupKey) {
+  const checkbox = panel.querySelector(".metric-contribute-confirm");
+  const btn = panel.querySelector(".metric-contribute-btn");
+  const status = panel.querySelector(".metric-contribute-status");
+  if (!checkbox || !btn) return;
+
+  checkbox.addEventListener("change", () => {
+    btn.disabled = !checkbox.checked;
+  });
+
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    checkbox.disabled = true;
+    status.textContent = "Envoi…";
+
+    const res = await submitMetricRun({
+      metric,
+      groupKey,
+      score: measurement.score,
+      unit: measurement.unit,
+      readScore: measurement.readScore,
+      intensity: measurement.intensity,
+      threads: ctx.threads,
+      deviceMemory: ctx.deviceMemory,
+      os: ctx.os,
+    });
+
+    if (res.ok) {
+      status.innerHTML = `<span style="color:var(--good)">✓ Merci ! ${
+        res.count ? res.count + " run(s) pour ce groupe." : ""
+      }</span>`;
+    } else {
+      status.innerHTML = `<span style="color:var(--bad)">Échec : ${escapeHtml(
+        res.error || "inconnu"
+      )}</span>`;
+      checkbox.disabled = false;
+    }
+  });
+}
+
 async function getContextSpecs() {
+  let os = "";
+  try {
+    const uaData = /** @type {any} */ (navigator).userAgentData;
+    if (uaData) {
+      const high = await uaData.getHighEntropyValues(["platform"]);
+      os = high.platform || uaData.platform || "";
+    }
+  } catch {
+    /* ignore */
+  }
+  if (!os) os = osFromUA();
   return {
     threads: navigator.hardwareConcurrency || null,
     deviceMemory: /** @type {any} */ (navigator).deviceMemory || null,
+    os: os || null,
   };
+}
+
+/** Coarse OS family from the UA string (fallback when UA-CH is absent). */
+function osFromUA() {
+  const ua = navigator.userAgent;
+  if (/Windows NT 10/.test(ua)) return "Windows";
+  if (/Windows/.test(ua)) return "Windows";
+  if (/Mac OS X/.test(ua)) return "macOS";
+  if (/Android/.test(ua)) return "Android";
+  if (/(iPhone|iPad|iPod)/.test(ua)) return "iOS";
+  if (/Linux/.test(ua)) return "Linux";
+  return "";
 }
 
 // Only keep the comparable bits in storage.
@@ -612,7 +850,7 @@ function renderCompareTable() {
     `</tr>`;
 
   // Rows: each metric across runs, with delta vs the most recent run's neighbor.
-  tbody.innerHTML = renderHealthRow(runs) + COMPARE_ROWS.map((row) => {
+  tbody.innerHTML = renderHealthRows(runs) + COMPARE_ROWS.map((row) => {
     const cells = runs
       .map((run, i) => {
         const r = run.results[row.key];
@@ -659,13 +897,27 @@ function renderCompareTable() {
   });
 }
 
-// Health index row (only meaningful when a CPU was selected for the run).
-function renderHealthRow(runs) {
-  const hasAny = runs.some((r) => r.results.cpu && r.results.cpu.health);
+// Health index rows — one per tracked metric (CPU, SSD, RAM), shown only when
+// at least one run has a health index for that metric (mesuré / potentiel).
+function renderHealthRows(runs) {
+  const HEALTH_METRICS = [
+    { key: "cpu", label: "Indice CPU" },
+    { key: "disk", label: "Indice SSD" },
+    { key: "ram", label: "Indice RAM" },
+  ];
+  return HEALTH_METRICS.map((m) => renderHealthRow(runs, m.key, m.label)).join(
+    ""
+  );
+}
+
+function renderHealthRow(runs, metricKey, label) {
+  const hasAny = runs.some(
+    (r) => r.results[metricKey] && r.results[metricKey].health
+  );
   if (!hasAny) return "";
   const cells = runs
     .map((run) => {
-      const h = run.results.cpu && run.results.cpu.health;
+      const h = run.results[metricKey] && run.results[metricKey].health;
       if (!h) return `<td class="num" style="color:var(--text-faint)">—</td>`;
       const cls =
         h.verdict === "degraded"
@@ -676,7 +928,9 @@ function renderHealthRow(runs) {
       return `<td class="num ${cls}">${h.percent.toFixed(0)}%</td>`;
     })
     .join("");
-  return `<tr style="background:var(--bg-elev-2)"><td class="metric-name"><strong>Indice CPU</strong><br><span style="font-size:10px;color:var(--text-faint)">mesuré / potentiel</span></td>${cells}</tr>`;
+  return `<tr style="background:var(--bg-elev-2)"><td class="metric-name"><strong>${escapeHtml(
+    label
+  )}</strong><br><span style="font-size:10px;color:var(--text-faint)">mesuré / potentiel</span></td>${cells}</tr>`;
 }
 
 // ===========================================================================

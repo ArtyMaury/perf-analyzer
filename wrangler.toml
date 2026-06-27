@@ -1,17 +1,25 @@
-# Cloudflare Pages — direct upload deployment.
-# Deploy with:  npm run deploy   (runs vite build then wrangler pages deploy dist)
+# Cloudflare Pages — Git-connected deployment.
+#
+# Cloudflare builds and deploys automatically on every push to `main`
+# (build command + output dir are set in the Pages dashboard).
 #
 # The app is static (HTML/CSS/JS) PLUS Pages Functions under /functions
 # that expose /api/* endpoints backed by a D1 (SQLite) database for sharing
 # clean benchmark baselines between users.
+#
+# NOTE: In Git-connected mode the production D1 binding (`DB`) is configured
+# in the Pages dashboard (Settings -> Bindings), NOT here. Declaring a concrete
+# `database_id` in this file makes Pages treat the deploy as a Workers project
+# and fails the build. The binding below (by name) is only used for LOCAL dev
+# via `wrangler pages dev` (npm run dev:full) and local migrations.
 
 name = "perf-analyzer"
-pages_build_output_dir = "dist"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
-# D1 database binding (available as `env.DB` inside functions).
+# Local-only D1 binding (available as `env.DB` inside functions during
+# `wrangler pages dev`). Miniflare creates a local database by name; no
+# remote database_id is needed for local development.
 [[d1_databases]]
 binding = "DB"
 database_name = "perf-analyzer-db"
-database_id = "07586730-41ae-4cff-a10b-a46e72f4276d"

@@ -64,3 +64,44 @@ export async function fetchBaseline(cpuName) {
     return null;
   }
 }
+
+/**
+ * Submit an opt-in clean disk/RAM run (generic metric endpoint).
+ * @returns {Promise<{ ok:boolean, count?:number, error?:string }>}
+ */
+export async function submitMetricRun(payload) {
+  try {
+    const res = await fetch(`${API_BASE}/metric-runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, clientId: getClientId() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: data.error || `HTTP ${res.status}` };
+    }
+    return data;
+  } catch (err) {
+    return { ok: false, error: "API injoignable (" + (err.message || "réseau") + ")" };
+  }
+}
+
+/**
+ * Fetch the community baseline for a disk/RAM metric within a grouping bucket.
+ * @returns {Promise<null | { count:number, baselineScore:number|null, unit:string|null }>}
+ */
+export async function fetchMetricBaseline(metric, groupKey) {
+  if (!metric || !groupKey) return null;
+  try {
+    const res = await fetch(
+      `${API_BASE}/metric-baseline?metric=${encodeURIComponent(
+        metric
+      )}&group=${encodeURIComponent(groupKey)}`,
+      { cache: "no-store" }
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}

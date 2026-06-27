@@ -171,3 +171,108 @@ export function clearBaselines() {
     /* ignore */
   }
 }
+
+// ===========================================================================
+// Generic per-metric baselines (SSD / RAM — same idea as the CPU one).
+//
+// The CPU health above is keyed by CPU model. For disk and RAM there is no
+// hardware model exposed by the browser, so we keep ONE baseline per metric
+// per browser: the best throughput we ever observed on this machine = the
+// "healthy potential". Every later run is expressed as measured / baseline,
+// which is exactly what flags an EDR/VPN/throttling slowdown.
+//
+// We store throughput where HIGHER IS BETTER (Mo/s for disk, Go/s for RAM),
+// mirroring `mops` for the CPU.
+// ===========================================================================
+
+const METRIC_BASELINE_KEY = "perf-analyzer.metric-baselines.v1";
+
+/**
+ * @typedef {Object} MetricBaseline
+ * @property {string} metric     'disk' | 'ram'
+ * @property {number} score      best measured throughput (higher = better)
+ * @property {string} unit       display unit (e.g. 'Mo/s', 'Go/s')
+ * @property {number} when       timestamp
+ */
+
+/** @returns {Record<string, MetricBaseline>} keyed by metric */
+export function loadMetricBaselines() {
+  try {
+    const raw = localStorage.getItem(METRIC_BASELINE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveMetricBaselines(map) {
+  try {
+    localStorage.setItem(METRIC_BASELINE_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Record/refresh the baseline for a metric if this run is the best so far.
+ *
+ * @param {string} metric  'disk' | 'ram'
+ * @param {{ score:number, unit?:string }} measured  throughput, higher=better
+ * @returns {MetricBaseline | null}
+ */
+export function updateMetricBaseline(metric, measured) {
+  if (!metric || !Number.isFinite(measured?.score)) return null;
+  const map = loadMetricBaselines();
+  const existing = map[metric];
+
+  if (!existing || measured.score > existing.score) {
+    map[metric] = {
+      metric,
+      score: measured.score,
+      unit: measured.unit || (existing ? existing.unit : ""),
+      when: Date.now(),
+    };
+    saveMetricBaselines(map);
+  }
+  return map[metric];
+}
+
+/**
+ * Compute the health index for a metric run against its local baseline.
+ * Same verdict thresholds as the CPU index.
+ *
+ * @param {string} metric  'disk' | 'ram'
+ * @param {{ score:number }} measured
+ * @returns {null | {
+ *   efficiency:number, percent:number,
+ *   verdict:'ok'|'slight'|'degraded'|'baseline',
+ *   baseline: MetricBaseline
+ * }}
+ */
+export function computeMetricHealth(metric, measured) {
+  if (!metric || !Number.isFinite(measured?.score)) return null;
+  const map = loadMetricBaselines();
+  const base = map[metric];
+  if (!base || !base.score) return null;
+
+  if (measured.score >= base.score) {
+    return { efficiency: 1, percent: 100, verdict: "baseline", baseline: base };
+  }
+
+  const efficiency = measured.score / base.score;
+  const percent = efficiency * 100;
+  let verdict;
+  if (percent >= 92) verdict = "ok";
+  else if (percent >= 75) verdict = "slight";
+  else verdict = "degraded";
+
+  return { efficiency, percent, verdict, baseline: base };
+}
+
+export function clearMetricBaselines() {
+  try {
+    localStorage.removeItem(METRIC_BASELINE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
