@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "vite build && wrangler pages deploy dist --project-name perf-analyzer",
+    "deploy:manual": "vite build && wrangler pages deploy dist --project-name perf-analyzer",
     "cf:login": "wrangler login",
     "db:migrate": "wrangler d1 execute perf-analyzer-db --remote --file=./schema.sql",
     "db:migrate:local": "wrangler d1 execute perf-analyzer-db --local --file=./schema.sql",

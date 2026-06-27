@@ -107,6 +107,29 @@ npm run preview      # prévisualise le build
 
 ## Déploiement (Cloudflare Pages)
 
+### Mode recommandé : intégration Git (déploiement automatique)
+
+Le projet Pages est connecté au repo GitHub. Cloudflare clone, build et déploie
+**automatiquement** à chaque push sur `main`. Réglages à mettre dans le dashboard
+(**Workers & Pages → perf-analyzer → Settings → Builds**) :
+
+| Réglage                  | Valeur          |
+| ------------------------ | --------------- |
+| Build command            | `npm run build` |
+| Build output directory   | `dist`          |
+| Deploy command           | **(vide)**      |
+
+> ⚠️ **Ne PAS renseigner de "Deploy command"** (ex. `npx wrangler pages deploy`).
+> Avec l'intégration Git, Cloudflare gère le déploiement lui-même. Une deploy
+> command custom relance Wrangler avec un token API et échoue en
+> `Authentication error [code: 10000]` si le token n'a pas les permissions
+> `Cloudflare Pages: Edit` + `Account: Read`.
+
+Le binding D1 (`DB` → `perf-analyzer-db`) se configure côté dashboard
+(**Settings → Functions → D1 database bindings**), pas dans `wrangler.toml`.
+
+### Mode alternatif : déploiement manuel depuis ton poste
+
 Authentification (une fois) :
 
 ```bash
@@ -116,7 +139,7 @@ npm run cf:login
 Build + déploiement :
 
 ```bash
-npm run deploy       # = vite build + wrangler pages deploy dist
+npm run deploy:manual    # = vite build + wrangler pages deploy dist
 ```
 
 Le projet Pages s'appelle `perf-analyzer`. La config est dans `wrangler.toml`,
