@@ -304,14 +304,13 @@ function renderHealthBadge(key, health) {
     health.verdict === "baseline" ? "◆" : health.verdict === "ok" ? "✓" : "▼";
   badge.textContent = `${arrow} Indice ${pct} — ${label}`;
   const base = health.baseline || {};
-  if (base.cpuName != null && base.cpuMark) {
-    // CPU baseline (cross-CPU normalized via PassMark).
+  if (base.cpuMark) {
+    // CPU baseline (PassMark-normalized yield).
     badge.title =
       `Rendement normalisé (mops / PassMark) vs meilleure référence.\n` +
-      `Réf: « ${base.cpuName} » (PassMark ${Number(base.cpuMark).toLocaleString("fr-FR")}) ` +
-      `— ${Number(base.measuredMops || 0).toFixed(1)} Mops/s.\n` +
-      `Rendement réf: ${((base.yield || base.measuredMops / base.cpuMark) * 1000).toFixed(3)} ` +
-      `mMops/Mark.`;
+      `Réf: PassMark ${Number(base.cpuMark).toLocaleString("fr-FR")} ` +
+      `— ${Number(base.measuredMops || 0).toFixed(1)} Mops/s ` +
+      `(rendement ${(base.yield * 1000).toFixed(3)} mMops/Mark).`;
   } else if (base.score != null) {
     // Generic metric baseline (disk/RAM): best throughput seen on this machine.
     badge.title =
@@ -397,9 +396,9 @@ async function runAll() {
       // yield against the best reference (cross-CPU comparison).
       if (key === "cpu" && selectedCpu) {
         const measured = { mops: result.mops, ms: result.durationMs };
-        // Establish/refresh the LOCAL baseline (best run for this CPU model).
-        updateBaseline(selectedCpu.n, selectedCpu.m, measured);
-        // Compute health via normalized yield comparison (cross-CPU).
+        // Establish/refresh the baseline (best normalized yield ever seen).
+        updateBaseline(selectedCpu.m, measured);
+        // Compute health via normalized yield comparison.
         const health = computeHealth(selectedCpu.m, measured);
         if (health) {
           renderHealthBadge(key, health);
